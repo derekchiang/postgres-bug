@@ -1,11 +1,10 @@
 require('dotenv').config()
 
-const { createPool, sql } = require('slonik')
-const { createQueryLoggingInterceptor } = require('slonik-interceptor-query-logging')
 const { migrator } = require('./migrate')
 
-const pool = createPool(process.env.POSTGRES_CONNECTION_STRING, {
-  interceptors: [createQueryLoggingInterceptor()],
+const { Pool } = require('pg')
+const pool = new Pool({
+  connectionString: process.env.POSTGRES_CONNECTION_STRING,
 })
 
 const range = (n) => {
@@ -13,22 +12,30 @@ const range = (n) => {
 }
 
 async function createUser() {
+  const client = await pool.connect()
+
   try {
-    await pool.transaction(async (trx) => {
-      await trx.query(sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`)
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;')
 
-      const userCount = await countUsers(trx)
-      if (userCount === 0) {
-        await trx.query(sql`insert into users default values`)
-      }
-    })
-  } catch (err) {
+    let res = await client.query('SELECT count(*) FROM users')
+    const userCount = res.rows[0].count
+    if (userCount == 0) {
+      await client.query('INSERT INTO users DEFAULT VALUES')
+    }
 
+    await client.query('COMMIT')
+  } catch (e) {
+    await client.query('ROLLBACK')
+    throw e
+  } finally {
+    await client.release()
   }
 }
 
-async function countUsers(conn) {
-  const res = await conn.query(sql`select count(*) from users`)
+async function countUsers() {
+  const client = await pool.connect()
+
+  const res = await client.query('SELECT count(*) FROM users')
   return res.rows[0].count
 }
 
@@ -39,7 +46,10 @@ describe("serializable transactions", () => {
   })
 
   test('creating rows in parallel', async () => {
-    await Promise.all(range(100).map(createUser))
-    await expect(countUsers(pool)).resolves.toBe(1)
+    try {
+      await Promise.all(range(100).map(createUser))
+    } catch (err) {
+    }
+    return expect(countUsers()).resolves.toBe("1")
   })
 })

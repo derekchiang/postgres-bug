@@ -10,6 +10,7 @@
   "license": "ISC",
   "dependencies": {
     "dotenv": "^8.2.0",
+    "pg": "^8.0.0",
     "slonik": "^22.4.4",
     "slonik-interceptor-query-logging": "^1.3.8"
   },
