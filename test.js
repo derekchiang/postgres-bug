@@ -2,41 +2,30 @@ require('dotenv').config()
 
 const { migrator } = require('./migrate')
 
-const { Pool } = require('pg')
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_CONNECTION_STRING,
-})
+const pgp = require('pg-promise')()
+const { TransactionMode, isolationLevel } = pgp.txMode
+const db = pgp(process.env.POSTGRES_CONNECTION_STRING)
 
 const range = (n) => {
   return [...Array(n).keys()]
 }
 
 async function createUser() {
-  const client = await pool.connect()
+  const mode = new TransactionMode({
+    tiLevel: isolationLevel.serializable,
+    // tiLevel: isolationLevel.readCommitted,
+  })
 
-  try {
-    await client.query('BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;')
-
-    let res = await client.query('SELECT count(*) FROM users')
-    const userCount = res.rows[0].count
+  await db.tx({ mode }, async (t) => {
+    const userCount = await t.one('SELECT count(*) FROM users', [], c => +c.count)
     if (userCount == 0) {
-      await client.query('INSERT INTO users DEFAULT VALUES')
+      await t.none('INSERT INTO users DEFAULT VALUES')
     }
-
-    await client.query('COMMIT')
-  } catch (e) {
-    await client.query('ROLLBACK')
-    throw e
-  } finally {
-    await client.release()
-  }
+  })
 }
 
 async function countUsers() {
-  const client = await pool.connect()
-
-  const res = await client.query('SELECT count(*) FROM users')
-  return res.rows[0].count
+  return await db.one('SELECT count(*) FROM users', [], c => +c.count)
 }
 
 describe("serializable transactions", () => {
@@ -49,7 +38,8 @@ describe("serializable transactions", () => {
     try {
       await Promise.all(range(100).map(createUser))
     } catch (err) {
+      console.log(err)
     }
-    return expect(countUsers()).resolves.toBe("1")
+    return expect(countUsers()).resolves.toBe(1)
   })
 })
